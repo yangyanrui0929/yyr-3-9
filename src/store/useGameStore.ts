@@ -16,6 +16,8 @@ import {
   PLANT_MATURITY_LOSS,
   PLANT_SATISFACTION_BOOST,
   PLANT_FAULT_REDUCTION_FACTOR,
+  NIGHT_PLANT_SPAWN_CHANCE,
+  MAX_AUTO_PLANTS,
 } from '../utils/constants';
 import {
   calculatePowerNetwork,
@@ -24,6 +26,7 @@ import {
   getPlantFaultReductionPositions,
   calculateWeakPowerZones,
 } from '../utils/powerCalculator';
+import type { PlantPowerState } from '../utils/powerCalculator';
 
 const STORAGE_KEY = 'floating-island-grid-game-save';
 
@@ -277,6 +280,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const state = get();
     const newGrid = state.grid.map((row) => row.map((c) => ({ ...c })));
     const isNight = state.dayTime >= DAY_THRESHOLD;
+    const justTurnedNight = state.dayTime < DAY_THRESHOLD + 0.5 && state.dayTime >= DAY_THRESHOLD;
 
     const faultReductionPositions = getPlantFaultReductionPositions(newGrid);
     const faultReductionSet = new Set(faultReductionPositions.map((p) => `${p.x},${p.y}`));
@@ -307,6 +311,75 @@ export const useGameStore = create<GameState>((set, get) => ({
       }
     }
 
+    if (isNight) {
+      let totalPlants = 0;
+      for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+          if (newGrid[y][x].type === 'fluoroplant') totalPlants++;
+        }
+      }
+
+      const weakPowerZonesForSpawn = calculateWeakPowerZones(newGrid, poweredCells);
+      const spawnCandidates: Array<{ x: number; y: number; level: number }> = [];
+
+      for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+          const cell = newGrid[y][x];
+          if (cell.type !== 'empty') continue;
+          const weakLevel = weakPowerZonesForSpawn.get(`${x},${y}`) ?? 0;
+          if (weakLevel >= 2 && weakLevel <= 8) {
+            const nearWindmill = (() => {
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx === 0 && dy === 0) continue;
+                  const nx = x + dx, ny = y + dy;
+                  if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+                  if (newGrid[ny][nx].type === 'windmill' && !newGrid[ny][nx].faulty) return true;
+                }
+              }
+              return false;
+            })();
+            const nearFactory = (() => {
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx === 0 && dy === 0) continue;
+                  const nx = x + dx, ny = y + dy;
+                  if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+                  if (newGrid[ny][nx].type === 'factory' && newGrid[ny][nx].powered && !newGrid[ny][nx].faulty) return true;
+                }
+              }
+              return false;
+            })();
+            if (!nearWindmill && !nearFactory) {
+              spawnCandidates.push({ x, y, level: weakLevel });
+            }
+          }
+        }
+      }
+
+      const maxSpawn = Math.min(spawnCandidates.length, MAX_AUTO_PLANTS - totalPlants);
+      spawnCandidates.sort((a, b) => b.level - a.level);
+
+      for (let i = 0; i < maxSpawn; i++) {
+        const c = spawnCandidates[i];
+        const spawnChance = justTurnedNight
+          ? NIGHT_PLANT_SPAWN_CHANCE * 4
+          : NIGHT_PLANT_SPAWN_CHANCE;
+        if (Math.random() < spawnChance) {
+          newGrid[c.y][c.x] = {
+            x: c.x,
+            y: c.y,
+            type: 'fluoroplant',
+            rotation: 0,
+            powered: false,
+            faulty: false,
+            plantHealth: 60,
+            plantMaturity: 0,
+          };
+        }
+      }
+    }
+
     for (let y = 0; y < GRID_SIZE; y++) {
       for (let x = 0; x < GRID_SIZE; x++) {
         const cell = newGrid[y][x];
@@ -319,7 +392,7 @@ export const useGameStore = create<GameState>((set, get) => ({
           health = Math.max(0, health - PLANT_HEALTH_LOSS_WITHER);
           maturity = Math.max(0, maturity - PLANT_MATURITY_LOSS);
         } else {
-          const powerState = assessPlantPowerState(newGrid, x, y, poweredCells);
+          const powerState: PlantPowerState = assessPlantPowerState(newGrid, x, y, poweredCells);
 
           switch (powerState) {
             case 'thriving':
@@ -344,7 +417,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         newGrid[y][x].plantHealth = health;
         newGrid[y][x].plantMaturity = maturity;
 
-        if (health <= 0 && !isNight) {
+        if (health <= 0) {
           newGrid[y][x] = {
             x,
             y,

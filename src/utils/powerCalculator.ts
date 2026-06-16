@@ -8,6 +8,8 @@ import {
   WEAK_POWER_MAX_NEIGHBORS,
   OVERPOWER_SOURCE_RANGE,
   PLANT_FAULT_REDUCTION_RADIUS,
+  OVERPOWER_WIRE_NEIGHBORS,
+  HIGH_POWER_CONSUMER_RANGE,
 } from './constants';
 
 export type PlantPowerState = 'thriving' | 'ambient' | 'overpowered' | 'withered';
@@ -61,9 +63,6 @@ export function calculatePowerNetwork(
       }
       if (cell.type === 'factory') {
         totalConsumption += BUILDING_STATS.factory.consumption;
-      }
-      if (cell.type === 'fluoroplant') {
-        totalConsumption += BUILDING_STATS.fluoroplant.consumption;
       }
     }
   }
@@ -243,6 +242,42 @@ function countAdjacentPowered(grid: GridCell[][], x: number, y: number): number 
   return count;
 }
 
+function getWeakPowerLevel(grid: GridCell[][], x: number, y: number, poweredCells: Set<string>): number {
+  let weakPowerLevel = 0;
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+      const neighbor = grid[ny][nx];
+      if (neighbor.type === 'wire' && poweredCells.has(`${nx},${ny}`) && !neighbor.faulty) {
+        const dist = Math.abs(dx) + Math.abs(dy);
+        if (dist === 1) weakPowerLevel += 3;
+        else if (dist === 2) weakPowerLevel += 2;
+        else weakPowerLevel += 1;
+      }
+    }
+  }
+  return weakPowerLevel;
+}
+
+function countNearbyPoweredWires(grid: GridCell[][], x: number, y: number, range: number): number {
+  let count = 0;
+  for (let dy = -range; dy <= range; dy++) {
+    for (let dx = -range; dx <= range; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+      const cell = grid[ny][nx];
+      if (cell.type === 'wire' && cell.powered && !cell.faulty) count++;
+      if ((cell.type === 'house' || cell.type === 'factory') && cell.powered && !cell.faulty) count++;
+    }
+  }
+  return count;
+}
+
 function isNearHighPowerSource(grid: GridCell[][], x: number, y: number): boolean {
   for (let dy = -OVERPOWER_SOURCE_RANGE; dy <= OVERPOWER_SOURCE_RANGE; dy++) {
     for (let dx = -OVERPOWER_SOURCE_RANGE; dx <= OVERPOWER_SOURCE_RANGE; dx++) {
@@ -257,6 +292,20 @@ function isNearHighPowerSource(grid: GridCell[][], x: number, y: number): boolea
   return false;
 }
 
+function isNearHighPowerConsumer(grid: GridCell[][], x: number, y: number): boolean {
+  for (let dy = -HIGH_POWER_CONSUMER_RANGE; dy <= HIGH_POWER_CONSUMER_RANGE; dy++) {
+    for (let dx = -HIGH_POWER_CONSUMER_RANGE; dx <= HIGH_POWER_CONSUMER_RANGE; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+      const cell = grid[ny][nx];
+      if ((cell.type === 'factory') && cell.powered && !cell.faulty) return true;
+    }
+  }
+  return false;
+}
+
 export function assessPlantPowerState(
   grid: GridCell[][],
   x: number,
@@ -266,19 +315,16 @@ export function assessPlantPowerState(
   const cell = grid[y][x];
   if (cell.type !== 'fluoroplant') return 'withered';
 
-  const isPowered = poweredCells.has(`${x},${y}`);
-  const nearHighPower = isNearHighPowerSource(grid, x, y);
+  const weakPowerLevel = getWeakPowerLevel(grid, x, y, poweredCells);
 
-  if (nearHighPower) return 'overpowered';
+  const nearWindmill = isNearHighPowerSource(grid, x, y);
+  const nearFactory = isNearHighPowerConsumer(grid, x, y);
+  const denseWires = countNearbyPoweredWires(grid, x, y, 1) >= OVERPOWER_WIRE_NEIGHBORS;
 
-  if (isPowered) {
-    const adjacentPowered = countAdjacentPowered(grid, x, y);
-    if (adjacentPowered <= WEAK_POWER_MAX_NEIGHBORS) return 'thriving';
-    return 'overpowered';
-  }
+  if (nearWindmill || nearFactory || denseWires) return 'overpowered';
 
-  const adjacentPowered = countAdjacentPowered(grid, x, y);
-  if (adjacentPowered > 0) return 'ambient';
+  if (weakPowerLevel >= 3) return 'thriving';
+  if (weakPowerLevel >= 1) return 'ambient';
 
   return 'withered';
 }
