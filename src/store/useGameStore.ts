@@ -7,8 +7,23 @@ import {
   FAULT_CHANCE,
   BUILDING_STATS,
   DAY_THRESHOLD,
+  PLANT_HEALTH_MAX,
+  PLANT_HEALTH_GAIN_WEAK,
+  PLANT_HEALTH_GAIN_AMBIENT,
+  PLANT_HEALTH_LOSS_OVERPOWER,
+  PLANT_HEALTH_LOSS_WITHER,
+  PLANT_MATURITY_GAIN,
+  PLANT_MATURITY_LOSS,
+  PLANT_SATISFACTION_BOOST,
+  PLANT_FAULT_REDUCTION_FACTOR,
 } from '../utils/constants';
-import { calculatePowerNetwork, countPoweredBuildings } from '../utils/powerCalculator';
+import {
+  calculatePowerNetwork,
+  countPoweredBuildings,
+  assessPlantPowerState,
+  getPlantFaultReductionPositions,
+  calculateWeakPowerZones,
+} from '../utils/powerCalculator';
 
 const STORAGE_KEY = 'floating-island-grid-game-save';
 
@@ -30,6 +45,7 @@ interface GameState {
   totalGeneration: number;
   totalConsumption: number;
   showSettlement: boolean;
+  weakPowerZones: Map<string, number>;
   setSelectedTool: (tool: ToolType) => void;
   placeOrRemove: (x: number, y: number) => void;
   rotateCell: (x: number, y: number) => void;
@@ -103,7 +119,9 @@ function recalcGrid(grid: GridCell[][], dayTime: number, storedPower: number) {
     }
   }
 
-  return { newGrid, poweredCells, totalGeneration, totalConsumption, batteryCapacity };
+  const weakPowerZones = calculateWeakPowerZones(newGrid, poweredCells);
+
+  return { newGrid, poweredCells, totalGeneration, totalConsumption, batteryCapacity, weakPowerZones };
 }
 
 function initGame(): Omit<GameState, keyof GameStateActions> {
@@ -113,7 +131,7 @@ function initGame(): Omit<GameState, keyof GameStateActions> {
   const storedPower = saved ? saved.storedPower : 10;
   const satisfaction = saved ? saved.satisfaction : 50;
 
-  const { newGrid, poweredCells, totalGeneration, totalConsumption, batteryCapacity } =
+  const { newGrid, poweredCells, totalGeneration, totalConsumption, batteryCapacity, weakPowerZones } =
     recalcGrid(grid, dayTime, storedPower);
 
   return {
@@ -127,6 +145,7 @@ function initGame(): Omit<GameState, keyof GameStateActions> {
     totalGeneration,
     totalConsumption,
     showSettlement: false,
+    weakPowerZones,
   };
 }
 
@@ -170,6 +189,8 @@ export const useGameStore = create<GameState>((set, get) => ({
         rotation: tool === 'wire' ? cell.rotation % 6 : 0,
         powered: false,
         faulty: false,
+        plantHealth: tool === 'fluoroplant' ? 50 : undefined,
+        plantMaturity: tool === 'fluoroplant' ? 0 : undefined,
       };
     }
 
@@ -181,6 +202,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
       maxStorage: result.batteryCapacity,
+      weakPowerZones: result.weakPowerZones,
     };
 
     saveToLocalStorage({
@@ -209,6 +231,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
       maxStorage: result.batteryCapacity,
+      weakPowerZones: result.weakPowerZones,
     };
 
     saveToLocalStorage({
@@ -237,6 +260,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
       maxStorage: result.batteryCapacity,
+      weakPowerZones: result.weakPowerZones,
     };
 
     saveToLocalStorage({
@@ -252,12 +276,22 @@ export const useGameStore = create<GameState>((set, get) => ({
   tick: () => {
     const state = get();
     const newGrid = state.grid.map((row) => row.map((c) => ({ ...c })));
+    const isNight = state.dayTime >= DAY_THRESHOLD;
+
+    const faultReductionPositions = getPlantFaultReductionPositions(newGrid);
+    const faultReductionSet = new Set(faultReductionPositions.map((p) => `${p.x},${p.y}`));
 
     for (let y = 0; y < GRID_SIZE; y++) {
       for (let x = 0; x < GRID_SIZE; x++) {
         const cell = newGrid[y][x];
-        if (cell.type !== 'empty' && !cell.faulty && Math.random() < FAULT_CHANCE) {
-          newGrid[y][x].faulty = true;
+        if (cell.type !== 'empty' && cell.type !== 'fluoroplant' && !cell.faulty) {
+          let chance = FAULT_CHANCE;
+          if (faultReductionSet.has(`${x},${y}`)) {
+            chance *= (1 - PLANT_FAULT_REDUCTION_FACTOR);
+          }
+          if (Math.random() < chance) {
+            newGrid[y][x].faulty = true;
+          }
         }
       }
     }
@@ -272,6 +306,58 @@ export const useGameStore = create<GameState>((set, get) => ({
         newGrid[yy][xx].powered = poweredCells.has(`${xx},${yy}`);
       }
     }
+
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const cell = newGrid[y][x];
+        if (cell.type !== 'fluoroplant') continue;
+
+        let health = cell.plantHealth ?? 50;
+        let maturity = cell.plantMaturity ?? 0;
+
+        if (cell.faulty) {
+          health = Math.max(0, health - PLANT_HEALTH_LOSS_WITHER);
+          maturity = Math.max(0, maturity - PLANT_MATURITY_LOSS);
+        } else {
+          const powerState = assessPlantPowerState(newGrid, x, y, poweredCells);
+
+          switch (powerState) {
+            case 'thriving':
+              health = Math.min(PLANT_HEALTH_MAX, health + PLANT_HEALTH_GAIN_WEAK);
+              maturity = Math.min(100, maturity + PLANT_MATURITY_GAIN);
+              break;
+            case 'ambient':
+              health = Math.min(PLANT_HEALTH_MAX, health + PLANT_HEALTH_GAIN_AMBIENT);
+              maturity = Math.min(100, maturity + PLANT_MATURITY_GAIN * 0.3);
+              break;
+            case 'overpowered':
+              health = Math.max(0, health - PLANT_HEALTH_LOSS_OVERPOWER);
+              maturity = Math.max(0, maturity - PLANT_MATURITY_LOSS);
+              break;
+            case 'withered':
+              health = Math.max(0, health - PLANT_HEALTH_LOSS_WITHER);
+              maturity = Math.max(0, maturity - PLANT_MATURITY_LOSS);
+              break;
+          }
+        }
+
+        newGrid[y][x].plantHealth = health;
+        newGrid[y][x].plantMaturity = maturity;
+
+        if (health <= 0 && !isNight) {
+          newGrid[y][x] = {
+            x,
+            y,
+            type: 'empty',
+            rotation: 0,
+            powered: false,
+            faulty: false,
+          };
+        }
+      }
+    }
+
+    const weakPowerZones = calculateWeakPowerZones(newGrid, poweredCells);
 
     const netPower = totalGeneration - totalConsumption;
     let newStoredPower = state.storedPower;
@@ -304,6 +390,24 @@ export const useGameStore = create<GameState>((set, get) => ({
       newSatisfaction = Math.max(0, state.satisfaction - 0.3);
     }
 
+    let maturePlantCount = 0;
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const cell = newGrid[y][x];
+        if (
+          cell.type === 'fluoroplant' &&
+          !cell.faulty &&
+          (cell.plantMaturity ?? 0) >= 80 &&
+          (cell.plantHealth ?? 0) >= 50
+        ) {
+          maturePlantCount++;
+        }
+      }
+    }
+    if (maturePlantCount > 0) {
+      newSatisfaction = Math.min(100, newSatisfaction + PLANT_SATISFACTION_BOOST * maturePlantCount);
+    }
+
     saveToLocalStorage({
       grid: newGrid,
       dayTime: newDayTime,
@@ -320,6 +424,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       poweredCells,
       totalGeneration,
       totalConsumption,
+      weakPowerZones,
     });
   },
 
@@ -338,6 +443,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
       showSettlement: false,
+      weakPowerZones: result.weakPowerZones,
     });
   },
 

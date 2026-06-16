@@ -5,7 +5,12 @@ import {
   DIR_OFFSETS,
   BUILDING_STATS,
   DAY_THRESHOLD,
+  WEAK_POWER_MAX_NEIGHBORS,
+  OVERPOWER_SOURCE_RANGE,
+  PLANT_FAULT_REDUCTION_RADIUS,
 } from './constants';
+
+export type PlantPowerState = 'thriving' | 'ambient' | 'overpowered' | 'withered';
 
 export function isWireConnected(wire: GridCell, direction: number): boolean {
   if (wire.type !== 'wire') return false;
@@ -56,6 +61,9 @@ export function calculatePowerNetwork(
       }
       if (cell.type === 'factory') {
         totalConsumption += BUILDING_STATS.factory.consumption;
+      }
+      if (cell.type === 'fluoroplant') {
+        totalConsumption += BUILDING_STATS.fluoroplant.consumption;
       }
     }
   }
@@ -118,7 +126,8 @@ export function calculatePowerNetwork(
         currentCell.type === 'windmill' ||
         currentCell.type === 'house' ||
         currentCell.type === 'factory' ||
-        currentCell.type === 'battery'
+        currentCell.type === 'battery' ||
+        currentCell.type === 'fluoroplant'
       ) {
         canConnectFromCurrent = true;
       }
@@ -130,7 +139,8 @@ export function calculatePowerNetwork(
         neighbor.type === 'windmill' ||
         neighbor.type === 'house' ||
         neighbor.type === 'factory' ||
-        neighbor.type === 'battery'
+        neighbor.type === 'battery' ||
+        neighbor.type === 'fluoroplant'
       ) {
         canConnectFromNeighbor = true;
       }
@@ -169,17 +179,16 @@ export function calculatePowerNetwork(
     for (let x = 0; x < GRID_SIZE; x++) {
       const cell = grid[y][x];
       if (
-        (cell.type === 'house' || cell.type === 'factory') &&
+        (cell.type === 'house' || cell.type === 'factory' || cell.type === 'fluoroplant') &&
         connectedCells.has(`${x},${y}`)
       ) {
-        connectedConsumers.push({
-          x,
-          y,
-          consumption:
-            cell.type === 'house'
-              ? BUILDING_STATS.house.consumption
-              : BUILDING_STATS.factory.consumption,
-        });
+        const consumption =
+          cell.type === 'house'
+            ? BUILDING_STATS.house.consumption
+            : cell.type === 'factory'
+            ? BUILDING_STATS.factory.consumption
+            : BUILDING_STATS.fluoroplant.consumption;
+        connectedConsumers.push({ x, y, consumption });
       }
     }
   }
@@ -221,4 +230,121 @@ export function countPoweredBuildings(
   }
 
   return { houses, poweredHouses, factories, poweredFactories };
+}
+
+function countAdjacentPowered(grid: GridCell[][], x: number, y: number): number {
+  let count = 0;
+  for (const [dx, dy] of DIR_OFFSETS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+    if (grid[ny][nx].powered && !grid[ny][nx].faulty) count++;
+  }
+  return count;
+}
+
+function isNearHighPowerSource(grid: GridCell[][], x: number, y: number): boolean {
+  for (let dy = -OVERPOWER_SOURCE_RANGE; dy <= OVERPOWER_SOURCE_RANGE; dy++) {
+    for (let dx = -OVERPOWER_SOURCE_RANGE; dx <= OVERPOWER_SOURCE_RANGE; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+      const cell = grid[ny][nx];
+      if (cell.type === 'windmill' && !cell.faulty) return true;
+    }
+  }
+  return false;
+}
+
+export function assessPlantPowerState(
+  grid: GridCell[][],
+  x: number,
+  y: number,
+  poweredCells: Set<string>
+): PlantPowerState {
+  const cell = grid[y][x];
+  if (cell.type !== 'fluoroplant') return 'withered';
+
+  const isPowered = poweredCells.has(`${x},${y}`);
+  const nearHighPower = isNearHighPowerSource(grid, x, y);
+
+  if (nearHighPower) return 'overpowered';
+
+  if (isPowered) {
+    const adjacentPowered = countAdjacentPowered(grid, x, y);
+    if (adjacentPowered <= WEAK_POWER_MAX_NEIGHBORS) return 'thriving';
+    return 'overpowered';
+  }
+
+  const adjacentPowered = countAdjacentPowered(grid, x, y);
+  if (adjacentPowered > 0) return 'ambient';
+
+  return 'withered';
+}
+
+export function calculateWeakPowerZones(
+  grid: GridCell[][],
+  poweredCells: Set<string>
+): Map<string, number> {
+  const zones = new Map<string, number>();
+
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      let weakPowerLevel = 0;
+
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+
+          const neighbor = grid[ny][nx];
+          if (neighbor.type === 'wire' && poweredCells.has(`${nx},${ny}`) && !neighbor.faulty) {
+            const dist = Math.abs(dx) + Math.abs(dy);
+            if (dist === 1) weakPowerLevel += 3;
+            else if (dist === 2) weakPowerLevel += 2;
+            else weakPowerLevel += 1;
+          }
+        }
+      }
+
+      if (weakPowerLevel > 0) {
+        zones.set(`${x},${y}`, weakPowerLevel);
+      }
+    }
+  }
+
+  return zones;
+}
+
+export function getPlantFaultReductionPositions(
+  grid: GridCell[][]
+): Array<{ x: number; y: number }> {
+  const positions: Array<{ x: number; y: number }> = [];
+
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const cell = grid[y][x];
+      if (
+        cell.type === 'fluoroplant' &&
+        !cell.faulty &&
+        (cell.plantMaturity ?? 0) >= 80
+      ) {
+        for (let dy = -PLANT_FAULT_REDUCTION_RADIUS; dy <= PLANT_FAULT_REDUCTION_RADIUS; dy++) {
+          for (let dx = -PLANT_FAULT_REDUCTION_RADIUS; dx <= PLANT_FAULT_REDUCTION_RADIUS; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+            if (Math.abs(dx) + Math.abs(dy) <= PLANT_FAULT_REDUCTION_RADIUS) {
+              positions.push({ x: nx, y: ny });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return positions;
 }

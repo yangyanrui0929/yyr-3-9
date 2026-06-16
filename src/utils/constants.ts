@@ -1,4 +1,4 @@
-export type CellType = 'empty' | 'windmill' | 'house' | 'factory' | 'battery' | 'wire';
+export type CellType = 'empty' | 'windmill' | 'house' | 'factory' | 'battery' | 'wire' | 'fluoroplant';
 
 export type ToolType = CellType | 'remove';
 
@@ -9,6 +9,8 @@ export interface GridCell {
   rotation: number;
   powered: boolean;
   faulty: boolean;
+  plantHealth?: number;
+  plantMaturity?: number;
 }
 
 export const GRID_SIZE = 8;
@@ -19,6 +21,7 @@ export const BUILDING_STATS = {
   factory: { dayGen: 0, nightGen: 0, consumption: 4, name: '工坊', emoji: '🏭' },
   battery: { dayGen: 0, nightGen: 0, consumption: 0, storage: 20, name: '蓄电池', emoji: '🔋' },
   wire: { dayGen: 0, nightGen: 0, consumption: 0, name: '电线', emoji: '⚡' },
+  fluoroplant: { dayGen: 0, nightGen: 0, consumption: 1, name: '萤光植物', emoji: '🌿' },
 } as const;
 
 export const WIRE_CONNECTIONS: Record<number, [boolean, boolean, boolean, boolean]> = {
@@ -43,6 +46,7 @@ export const TOOLS: Array<{ type: ToolType; name: string; emoji: string; descrip
   { type: 'factory', name: '工坊', emoji: '🏭', description: '消耗4电，生产物资' },
   { type: 'battery', name: '蓄电池', emoji: '🔋', description: '存储20电量' },
   { type: 'wire', name: '电线', emoji: '⚡', description: '传导电力，右键/R旋转' },
+  { type: 'fluoroplant', name: '萤光植物', emoji: '🌿', description: '弱电维持，成熟加满意度' },
   { type: 'remove', name: '拆除', emoji: '🗑️', description: '移除建筑或电线' },
 ];
 
@@ -50,3 +54,17 @@ export const DAY_LENGTH = 100;
 export const DAY_THRESHOLD = 50;
 export const TICK_INTERVAL = 300;
 export const FAULT_CHANCE = 0.002;
+
+export const PLANT_HEALTH_MAX = 100;
+export const PLANT_MATURITY_THRESHOLD = 80;
+export const PLANT_HEALTH_GAIN_WEAK = 1.5;
+export const PLANT_HEALTH_GAIN_AMBIENT = 0.5;
+export const PLANT_HEALTH_LOSS_OVERPOWER = 2.5;
+export const PLANT_HEALTH_LOSS_WITHER = 1.0;
+export const PLANT_MATURITY_GAIN = 0.3;
+export const PLANT_MATURITY_LOSS = 0.15;
+export const PLANT_SATISFACTION_BOOST = 0.15;
+export const PLANT_FAULT_REDUCTION_RADIUS = 2;
+export const PLANT_FAULT_REDUCTION_FACTOR = 0.5;
+export const WEAK_POWER_MAX_NEIGHBORS = 2;
+export const OVERPOWER_SOURCE_RANGE = 1;

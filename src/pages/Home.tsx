@@ -2,6 +2,7 @@ import { FloatingIsland } from '@/components/FloatingIsland';
 import { Toolbar } from '@/components/Toolbar';
 import { StatusBar } from '@/components/StatusBar';
 import { SettlementModal } from '@/components/SettlementModal';
+import { EcoPanel } from '@/components/EcoPanel';
 import { useGameLoop } from '@/hooks/useGameLoop';
 import { useGameStore } from '@/store/useGameStore';
 
@@ -51,8 +52,9 @@ export default function Home() {
             <FloatingIsland />
           </div>
 
-          <div className="order-3 lg:w-56 hidden lg:block">
+          <div className="order-3 lg:w-56 flex flex-col gap-4">
             <GameGuide isNight={isNight} />
+            <EcoPanel />
           </div>
         </div>
 
@@ -150,8 +152,21 @@ function GameGuide({ isNight }: { isNight: boolean }) {
           <span className="inline-block w-4 mr-1">⚡</span>
           <b>电线</b>连接建筑，可旋转
         </li>
+        <li>
+          <span className="inline-block w-4 mr-1">🌿</span>
+          <b>萤光植物</b>弱电维持，夜间发光
+        </li>
       </ul>
-      <div className="mt-4 pt-3 border-t border-gray-300/30">
+      <div className="mt-3 pt-3 border-t border-gray-300/30">
+        <h4 className="text-xs font-bold mb-1.5">🌿 萤光生态电网</h4>
+        <ul className={`text-xs space-y-1 ${isNight ? 'text-slate-400' : 'text-gray-500'}`}>
+          <li>• 靠近电线但远离风车 = 弱电区</li>
+          <li>• 弱电区植物繁茂，强电区灼伤</li>
+          <li>• 完全无电植物会枯萎</li>
+          <li>• 成熟植物提升满意度+降低故障</li>
+        </ul>
+      </div>
+      <div className="mt-3 pt-3 border-t border-gray-300/30">
         <p className={`text-xs ${isNight ? 'text-slate-400' : 'text-gray-500'}`}>
           💡 保持80%以上建筑供电可获得最高满意度！
         </p>

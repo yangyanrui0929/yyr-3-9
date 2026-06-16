@@ -26,14 +26,26 @@ export const SettlementModal: React.FC = () => {
   let windmills = 0;
   let batteries = 0;
   let faultyCount = 0;
+  let plants = 0;
+  let maturePlants = 0;
+  let avgPlantHealth = 0;
+  let plantHealthSum = 0;
   for (let y = 0; y < GRID_SIZE; y++) {
     for (let x = 0; x < GRID_SIZE; x++) {
       const cell = grid[y][x];
       if (cell.type === 'windmill') windmills++;
       if (cell.type === 'battery') batteries++;
       if (cell.faulty) faultyCount++;
+      if (cell.type === 'fluoroplant') {
+        plants++;
+        const h = cell.plantHealth ?? 50;
+        const m = cell.plantMaturity ?? 0;
+        plantHealthSum += h;
+        if (m >= 80 && h >= 50) maturePlants++;
+      }
     }
   }
+  if (plants > 0) avgPlantHealth = plantHealthSum / plants;
 
   const totalBuildings = houses + factories;
   const totalPowered = poweredHouses + poweredFactories;
@@ -121,8 +133,32 @@ export const SettlementModal: React.FC = () => {
                 <Battery className="w-4 h-4 text-amber-500" />
                 <span className="text-gray-600">蓄电池: <b>{batteries}</b> 组</span>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm">🌿</span>
+                <span className="text-gray-600">萤光植物: <b>{plants}</b> 株</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm">🌺</span>
+                <span className="text-gray-600">成熟植物: <b>{maturePlants}</b> 株</span>
+              </div>
             </div>
           </div>
+
+          {plants > 0 && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-3">
+              <h3 className="text-sm font-bold text-gray-700">🌿 生态概况</h3>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-emerald-600">{Math.round(avgPlantHealth)}%</p>
+                  <p className="text-xs text-gray-500">平均健康度</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-teal-600">{maturePlants}/{plants}</p>
+                  <p className="text-xs text-gray-500">成熟植物</p>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <h3 className="text-sm font-bold text-gray-700">⚡ 电力概况</h3>
